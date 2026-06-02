@@ -1,149 +1,149 @@
 name: Build and Release
 
 on:
-  schedule:
-    - cron: '0 2 * * *' # Run daily to monitor upstream changes
-  workflow_dispatch: # Allow manual trigger
+    schedule:
+        - cron: "0 2 * * *" # Run daily to monitor upstream changes
+    workflow_dispatch: # Allow manual trigger
 
 permissions:
-  contents: write # Needed to create releases and commit updates
+    contents: write # Needed to create releases and commit updates
 
 jobs:
-  check-version:
-    runs-on: ubuntu-latest
-    outputs:
-      latest_tag: ${{ steps.get_tag.outputs.latest_tag }}
-      should_build: ${{ steps.compare.outputs.should_build }}
-    steps:
-      - name: Get upstream latest tag
-        id: get_tag
-        run: |
-          LATEST_TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
-          echo "Latest tag: $LATEST_TAG"
-          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          
-      - name: Check if release exists
-        id: compare
-        run: |
-          if curl -s --head --fail "https://github.com/${{ github.repository }}/releases/tag/${{ steps.get_tag.outputs.latest_tag }}"; then
-            echo "Release already exists in our repo. Skipping."
-            echo "should_build=false" >> $GITHUB_OUTPUT
-          else
-            echo "Release does not exist. Triggering build."
-            echo "should_build=true" >> $GITHUB_OUTPUT
-          fi
+    check-version:
+        runs-on: ubuntu-latest
+        outputs:
+            latest_tag: ${{ steps.get_tag.outputs.latest_tag }}
+            should_build: ${{ steps.compare.outputs.should_build }}
+        steps:
+            - name: Get upstream latest tag
+              id: get_tag
+              run: |
+                  LATEST_TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
+                  echo "Latest tag: $LATEST_TAG"
+                  echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-  build:
-    needs: check-version
-    if: needs.check-version.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: archlinux:base-devel
-      volumes:
-        - /var/run/docker.sock:/var/run/docker.sock
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+            - name: Check if release exists
+              id: compare
+              run: |
+                  if curl -s --head --fail "https://github.com/${{ github.repository }}/releases/tag/${{ steps.get_tag.outputs.latest_tag }}"; then
+                    echo "Release already exists in our repo. Skipping."
+                    echo "should_build=false" >> $GITHUB_OUTPUT
+                  else
+                    echo "Release does not exist. Triggering build."
+                    echo "should_build=true" >> $GITHUB_OUTPUT
+                  fi
 
-      - name: Install build dependencies
-        run: |
-          pacman -Syu --noconfirm git sudo docker jq wget fuse2 desktop-file-utils grep awk cpio
-          
-      - name: Create builder user
-        run: |
-          useradd -m builder
-          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          usermod -aG docker builder || true
+    build:
+        needs: check-version
+        if: needs.check-version.outputs.should_build == 'true'
+        runs-on: ubuntu-latest
+        container:
+            image: archlinux:base-devel
+            volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Clone generic AUR package and set target tag
-        run: |
-          TAG="${{ needs.check-version.outputs.latest_tag }}"
-          PKGVER="${TAG#v}"
-          
-          sudo -u builder git clone https://aur.archlinux.org/euro-office-desktopeditors-git.git /home/builder/pkg
-          cd /home/builder/pkg
-          
-          # Modify PKGBUILD to build the specific tag instead of master branch
-          sed -i '/pkgver() {/,/}/d' PKGBUILD
-          sed -i "s/pkgver=.*/pkgver=$PKGVER/g" PKGBUILD
-          sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/g" PKGBUILD
-          sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/g" PKGBUILD
-          sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|g" PKGBUILD
+            - name: Install build dependencies
+              run: |
+                  pacman -Syu --noconfirm git sudo docker jq wget fuse2 desktop-file-utils grep awk cpio
 
-      - name: Build package natively via makepkg
-        run: |
-          cd /home/builder/pkg
-          # makepkg requires ownership
-          chown -R builder:builder /home/builder/pkg
-          sudo -u builder makepkg -s --noconfirm
+            - name: Create builder user
+              run: |
+                  useradd -m builder
+                  echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+                  usermod -aG docker builder || true
 
-      - name: Prepare Workspace Artifacts
-        id: prep
-        run: |
-          cd /home/builder/pkg
-          PKGFILE=$(ls *.pkg.tar.zst | head -n 1)
-          cp $PKGFILE ${{ github.workspace }}/
-          echo "pkgfile=$PKGFILE" >> $GITHUB_OUTPUT
-          
-      - name: Generate Portable AppImage
-        run: |
-          cd ${{ github.workspace }}
-          mkdir AppDir
-          tar -I zstd -xvf ${{ steps.prep.outputs.pkgfile }} -C AppDir
-          
-          cd AppDir
-          
-          # Create an AppRun execution hook
-          cat << 'EOF' > AppRun
-          #!/bin/bash
-          HERE="$(dirname "$(readlink -f "${0}")")"
-          export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/opt/eurooffice/desktopeditors:${LD_LIBRARY_PATH}"
-          export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
-          exec "${HERE}/usr/bin/euro-office-desktopeditors" "$@"
-          EOF
-          chmod +x AppRun
-          
-          # Route desktop and icon files required for AppImage packaging
-          cp usr/share/applications/euro-office-desktopeditors.desktop ./ 2>/dev/null || true
-          ICON_PATH=$(find usr/share/icons -name "euro-office-desktopeditors.png" -print -quit 2>/dev/null)
-          if [ -n "$ICON_PATH" ]; then
-             cp "$ICON_PATH" .
-          fi
-          
-          sed -i 's|Exec=/usr/bin/euro-office-desktopeditors|Exec=euro-office-desktopeditors|g' euro-office-desktopeditors.desktop || true
-          
-          cd ..
-          
-          # Download appimagetool binary
-          wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          
-          # Extract and repackage as appimage (runs without fuse requirement by extracting the tool first)
-          ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir euro-office-desktopeditors.AppImage
+            - name: Clone generic AUR package and set target tag
+              run: |
+                  TAG="${{ needs.check-version.outputs.latest_tag }}"
+                  PKGVER="${TAG#v}"
 
-      - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.check-version.outputs.latest_tag }}
-          files: |
-            *.pkg.tar.zst
-            *.AppImage
-          name: Euro-Office Desktop Editors ${{ needs.check-version.outputs.latest_tag }}
-          body: "Automated builds for Euro-Office (${{ needs.check-version.outputs.latest_tag }}).\n\nProvides Arch Linux Native installer and universal `.AppImage`."
+                  sudo -u builder git clone https://aur.archlinux.org/euro-office-desktopeditors-git.git /home/builder/pkg
+                  cd /home/builder/pkg
 
-      - name: Update bin PKGBUILD
-        run: |
-          TAG="${{ needs.check-version.outputs.latest_tag }}"
-          PKGVER="${TAG#v}"
-          PKGFILE="${{ steps.prep.outputs.pkgfile }}"
-          
-          # Auto-inject the updated version and exact artifact filename
-          sed -i "s/^pkgver=.*/pkgver=$PKGVER/g" aur-bin/PKGBUILD
-          sed -i "s|^source=.*|source=(\"euro-office-root-\${pkgver}.pkg.tar.zst::\${_repo_url}/releases/download/$TAG/$PKGFILE\")|g" aur-bin/PKGBUILD
-          
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-          git add aur-bin/PKGBUILD
-          git commit -m "chore: Update bin package to $PKGVER" || true
-          git push origin main || true
+                  # Modify PKGBUILD to build the specific tag instead of master branch
+                  sed -i '/pkgver() {/,/}/d' PKGBUILD
+                  sed -i "s/pkgver=.*/pkgver=$PKGVER/g" PKGBUILD
+                  sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/g" PKGBUILD
+                  sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/g" PKGBUILD
+                  sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|g" PKGBUILD
+
+            - name: Build package natively via makepkg
+              run: |
+                  cd /home/builder/pkg
+                  # makepkg requires ownership
+                  chown -R builder:builder /home/builder/pkg
+                  sudo -u builder makepkg -s --noconfirm
+
+            - name: Prepare Workspace Artifacts
+              id: prep
+              run: |
+                  cd /home/builder/pkg
+                  PKGFILE=$(ls *.pkg.tar.zst | head -n 1)
+                  cp $PKGFILE ${{ github.workspace }}/
+                  echo "pkgfile=$PKGFILE" >> $GITHUB_OUTPUT
+
+            - name: Generate Portable AppImage
+              run: |
+                  cd ${{ github.workspace }}
+                  mkdir AppDir
+                  tar -I zstd -xvf ${{ steps.prep.outputs.pkgfile }} -C AppDir
+
+                  cd AppDir
+
+                  # Create an AppRun execution hook
+                  cat << 'EOF' > AppRun
+                  #!/bin/bash
+                  HERE="$(dirname "$(readlink -f "${0}")")"
+                  export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/opt/eurooffice/desktopeditors:${LD_LIBRARY_PATH}"
+                  export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
+                  exec "${HERE}/usr/bin/euro-office-desktopeditors" "$@"
+                  EOF
+                  chmod +x AppRun
+
+                  # Route desktop and icon files required for AppImage packaging
+                  cp usr/share/applications/euro-office-desktopeditors.desktop ./ 2>/dev/null || true
+                  ICON_PATH=$(find usr/share/icons -name "euro-office-desktopeditors.png" -print -quit 2>/dev/null)
+                  if [ -n "$ICON_PATH" ]; then
+                     cp "$ICON_PATH" .
+                  fi
+
+                  sed -i 's|Exec=/usr/bin/euro-office-desktopeditors|Exec=euro-office-desktopeditors|g' euro-office-desktopeditors.desktop || true
+
+                  cd ..
+
+                  # Download appimagetool binary
+                  wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+                  chmod +x appimagetool-x86_64.AppImage
+
+                  # Extract and repackage as appimage (runs without fuse requirement by extracting the tool first)
+                  ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir euro-office-desktopeditors.AppImage
+
+            - name: Publish to GitHub Releases
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ needs.check-version.outputs.latest_tag }}
+                  files: |
+                      *.pkg.tar.zst
+                      *.AppImage
+                  name: Euro-Office Desktop Editors ${{ needs.check-version.outputs.latest_tag }}
+                  body: "Automated builds for Euro-Office (${{ needs.check-version.outputs.latest_tag }}).\n\nProvides Arch Linux Native installer and universal `.AppImage`."
+
+            - name: Update bin PKGBUILD
+              run: |
+                  TAG="${{ needs.check-version.outputs.latest_tag }}"
+                  PKGVER="${TAG#v}"
+                  PKGFILE="${{ steps.prep.outputs.pkgfile }}"
+
+                  # Auto-inject the updated version and exact artifact filename
+                  sed -i "s/^pkgver=.*/pkgver=$PKGVER/g" aur-bin/PKGBUILD
+                  sed -i "s|^source=.*|source=(\"euro-office-root-\${pkgver}.pkg.tar.zst::\${_repo_url}/releases/download/$TAG/$PKGFILE\")|g" aur-bin/PKGBUILD
+
+                  git config --global user.name 'github-actions[bot]'
+                  git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+                  git config --global --add safe.directory $GITHUB_WORKSPACE
+                  git add aur-bin/PKGBUILD
+                  git commit -m "chore: Update bin package to $PKGVER" || true
+                  git push origin main || true
