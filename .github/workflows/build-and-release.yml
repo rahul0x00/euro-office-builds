@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   schedule:
-    - cron: '0 2 * * *' # Run daily to monitor upstream changes
+    - cron: "0 2 * * *" # Run daily to monitor upstream changes
   workflow_dispatch: # Allow manual trigger
 
 permissions:
@@ -21,7 +21,7 @@ jobs:
           LATEST_TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
           echo "Latest tag: $LATEST_TAG"
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          
+
       - name: Check if release exists
         id: compare
         run: |
@@ -48,12 +48,12 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm git sudo docker jq wget fuse2 desktop-file-utils grep awk cpio
-          
+
       - name: Create builder user and install yay
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-          
+
           # Fix Docker socket permissions so the non-root builder user can use Docker.
           # The host socket GID won't match anything inside this container, so we
           # create a docker group with the correct GID and add builder to it.
@@ -62,7 +62,7 @@ jobs:
           usermod -aG docker builder
           # Also make the socket world-accessible as a fallback
           chmod 666 /var/run/docker.sock
-          
+
           # Install yay to handle AUR dependencies
           sudo -u builder bash -c "cd /home/builder && git clone https://aur.archlinux.org/yay-bin.git && cd yay-bin && makepkg -si --noconfirm"
 
@@ -70,28 +70,26 @@ jobs:
         run: |
           TAG="${{ needs.check-version.outputs.latest_tag }}"
           PKGVER="${TAG#v}"
-          
+
           sudo -u builder git clone https://aur.archlinux.org/euro-office-desktopeditors-git.git /home/builder/pkg
           cd /home/builder/pkg
-          
+
           # Modify PKGBUILD to build the specific tag instead of master branch
           sed -i '/pkgver() {/,/}/d' PKGBUILD
           sed -i "s/pkgver=.*/pkgver=$PKGVER/g" PKGBUILD
           sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/g" PKGBUILD
           sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/g" PKGBUILD
           sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|g" PKGBUILD
-          
+
           # Workaround: Fetch the new Docker build infrastructure from main branch 
           # because it doesn't exist in older upstream tags like v9.4.0
           cat << 'EOF' > patch.txt
-          git fetch origin main
-          git checkout FETCH_HEAD -- build
-          for sub in core desktop-apps sdkjs; do
-            (cd $sub && git remote add euro https://github.com/Euro-Office/$sub.git || true)
-            (cd $sub && git fetch euro main && git checkout euro/main -- .docker)
+          git fetch origin main 2>/dev/null || true
+          git checkout FETCH_HEAD -- build 2>/dev/null || true
+          for sub in core desktop-apps sdkjs web-apps; do
+            (cd $sub && git remote add euro https://github.com/Euro-Office/$sub.git 2>/dev/null || true)
+            (cd $sub && git fetch euro main 2>/dev/null && git checkout euro/main -- .docker 2>/dev/null || true)
           done
-          (cd web-apps && git remote add euro https://github.com/Euro-Office/web-apps.git || true)
-          (cd web-apps && git fetch euro main && git checkout euro/main -- .docker)
           EOF
           sed -i '/cd "$srcdir\/DesktopEditors"/r patch.txt' PKGBUILD
 
@@ -99,10 +97,10 @@ jobs:
         run: |
           cd /home/builder/pkg
           chown -R builder:builder /home/builder/pkg
-          
+
           # Pre-install the AUR dependency libtiff5 using yay safely
           sudo -u builder yay -S --noconfirm libtiff5
-          
+
           # Now makepkg will comfortably resolve the rest of the standard dependencies
           sudo -u builder makepkg -s --noconfirm
 
@@ -113,15 +111,15 @@ jobs:
           PKGFILE=$(ls *.pkg.tar.zst | head -n 1)
           cp $PKGFILE ${{ github.workspace }}/
           echo "pkgfile=$PKGFILE" >> $GITHUB_OUTPUT
-          
+
       - name: Generate Portable AppImage
         run: |
           cd ${{ github.workspace }}
           mkdir AppDir
           tar -I zstd -xvf ${{ steps.prep.outputs.pkgfile }} -C AppDir
-          
+
           cd AppDir
-          
+
           cat << 'EOF2' > AppRun
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
@@ -130,15 +128,15 @@ jobs:
           exec "${HERE}/usr/bin/euro-office-desktopeditors" "$@"
           EOF2
           chmod +x AppRun
-          
+
           cp usr/share/applications/euro-office-desktopeditors.desktop ./ 2>/dev/null || true
           ICON_PATH=$(find usr/share/icons -name "euro-office-desktopeditors.png" -print -quit 2>/dev/null)
           if [ -n "$ICON_PATH" ]; then
              cp "$ICON_PATH" .
           fi
-          
+
           sed -i 's|Exec=/usr/bin/euro-office-desktopeditors|Exec=euro-office-desktopeditors|g' euro-office-desktopeditors.desktop || true
-          
+
           cd ..
           wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
@@ -159,10 +157,10 @@ jobs:
           TAG="${{ needs.check-version.outputs.latest_tag }}"
           PKGVER="${TAG#v}"
           PKGFILE="${{ steps.prep.outputs.pkgfile }}"
-          
+
           sed -i "s/^pkgver=.*/pkgver=$PKGVER/g" aur-bin/PKGBUILD
           sed -i "s|^source=.*|source=(\"euro-office-root-\${pkgver}.pkg.tar.zst::\${_repo_url}/releases/download/$TAG/$PKGFILE\")|g" aur-bin/PKGBUILD
-          
+
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git config --global --add safe.directory $GITHUB_WORKSPACE
