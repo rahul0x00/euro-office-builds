@@ -80,6 +80,10 @@ jobs:
           sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/g" PKGBUILD
           sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/g" PKGBUILD
           sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|g" PKGBUILD
+          
+          # Workaround: older tags don't contain the 'build' directory, but PKGBUILD requires it.
+          # We patch prepare() to fetch the build directory from the main branch.
+          sed -i '/cd "$srcdir\/DesktopEditors"/a \ \ git fetch origin main \&\& git checkout FETCH_HEAD -- build' PKGBUILD
 
       - name: Build package natively via yay
         run: |
