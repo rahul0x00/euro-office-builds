@@ -18,7 +18,7 @@ jobs:
       - name: Get upstream latest tag
         id: get_tag
         run: |
-          LATEST_TAG=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
+          LATEST_TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
           echo "Latest tag: $LATEST_TAG"
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           
