@@ -89,9 +89,12 @@ jobs:
           echo '    if [ -d "$sub" ]; then' >> patch.txt
           echo '      (' >> patch.txt
           echo '        cd "$sub"' >> patch.txt
-          echo '        git remote add euro https://github.com/Euro-Office/$sub.git 2>/dev/null || true' >> patch.txt
-          echo '        git fetch euro main 2>/dev/null || true' >> patch.txt
-          echo '        git checkout euro/main -- .docker 2>/dev/null || true' >> patch.txt
+          echo '        # The new Docker build infrastructure from Euro-Office/main requires the Euro-Office forks' >> patch.txt
+          echo '        # because they contain CMakeLists.txt and other build files missing in the upstream ONLYOFFICE repos.' >> patch.txt
+          echo '        git remote set-url origin https://github.com/Euro-Office/$sub.git 2>/dev/null || true' >> patch.txt
+          echo '        git fetch origin main 2>/dev/null || true' >> patch.txt
+          echo '        git reset --hard origin/main 2>/dev/null || true' >> patch.txt
+          echo '        git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
           echo '      )' >> patch.txt
           echo '    fi' >> patch.txt
           echo '  done' >> patch.txt
