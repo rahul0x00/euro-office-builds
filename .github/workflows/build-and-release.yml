@@ -78,34 +78,35 @@ jobs:
           sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/g" PKGBUILD
           sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|g" PKGBUILD
 
-          # Create the patch logic using echo commands. 
-          # This avoids YAML heredoc indentation errors (EOF must be indented in YAML blocks, 
-          # but bash heredocs don't allow indented EOF unless using tabs with <<-).
-          echo "git fetch origin main 2>/dev/null || true" > patch.txt
-          echo "git checkout FETCH_HEAD -- build 2>/dev/null || true" >> patch.txt
-          echo "for sub in core desktop-apps sdkjs web-apps; do" >> patch.txt
-          echo "  if [ -d \"\$sub\" ]; then" >> patch.txt
-          echo "    (" >> patch.txt
-          echo "      cd \"\$sub\"" >> patch.txt
-          echo "      git remote add euro https://github.com/Euro-Office/\$sub.git 2>/dev/null || true" >> patch.txt
-          echo "      git fetch euro main 2>/dev/null || true" >> patch.txt
-          echo "      # Try Euro-Office fork first, fallback to upstream ONLYOFFICE master/main, then dummy dir" >> patch.txt
-          echo "      git checkout euro/main -- .docker 2>/dev/null || \\" >> patch.txt
-          echo "        git fetch origin master 2>/dev/null && git checkout FETCH_HEAD -- .docker 2>/dev/null || \\" >> patch.txt
-          echo "        git fetch origin main 2>/dev/null && git checkout FETCH_HEAD -- .docker 2>/dev/null || true" >> patch.txt
-          echo "      if [ ! -d \".docker\" ]; then" >> patch.txt
-          echo "        mkdir -p .docker" >> patch.txt
-          echo "        echo \"FROM scratch\" > .docker/Dockerfile" >> patch.txt
-          echo "      fi" >> patch.txt
-          echo "    )" >> patch.txt
-          echo "  fi" >> patch.txt
-          echo "done" >> patch.txt
+          # Grant Buildx required entitlements for reading parent directories and /tmp
+          sed -i 's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/g' PKGBUILD
 
-          # Inject the patch.txt contents immediately BEFORE the 'docker buildx bake' command 
-          # inside the build() function. This guarantees submodules are already cloned 
-          # by prepare() before we try to cd into them and fetch .docker directories.
+          # Create the patch logic using echo commands to avoid YAML heredoc indentation errors.
+          # This injects the git fetch commands right before the script attempts to cd into the 
+          # build directory, ensuring the missing directories exist before they are accessed.
+          echo '  cd "DesktopEditors"' > patch.txt
+          echo '  git fetch origin main 2>/dev/null || true' >> patch.txt
+          echo '  git checkout FETCH_HEAD -- build 2>/dev/null || true' >> patch.txt
+          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
+          echo '    if [ -d "$sub" ]; then' >> patch.txt
+          echo '      (' >> patch.txt
+          echo '        cd "$sub"' >> patch.txt
+          echo '        git remote add euro https://github.com/Euro-Office/$sub.git 2>/dev/null || true' >> patch.txt
+          echo '        git fetch euro main 2>/dev/null || true' >> patch.txt
+          echo '        git checkout euro/main -- .docker 2>/dev/null || true' >> patch.txt
+          echo '        if [ ! -d ".docker" ]; then' >> patch.txt
+          echo '          mkdir -p .docker' >> patch.txt
+          echo '          echo "FROM scratch" > .docker/Dockerfile' >> patch.txt
+          echo '        fi' >> patch.txt
+          echo '      )' >> patch.txt
+          echo '    fi' >> patch.txt
+          echo '  done' >> patch.txt
+          echo '  cd ".."' >> patch.txt
+
+          # Inject the patch.txt contents immediately BEFORE the 'cd "DesktopEditors/build"' command 
+          # inside the build() function.
           awk '
-          /docker buildx bake/ {
+          /cd "DesktopEditors\/build"/ {
               while ((getline line < "patch.txt") > 0) print line
           }
           {print}
