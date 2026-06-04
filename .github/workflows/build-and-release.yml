@@ -82,8 +82,6 @@ jobs:
           sed -i 's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/g' PKGBUILD
 
           # Create the patch logic using echo commands to avoid YAML heredoc indentation errors.
-          # This injects the git fetch commands right before the script attempts to cd into the 
-          # build directory, ensuring the missing directories exist before they are accessed.
           echo '  cd "DesktopEditors"' > patch.txt
           echo '  git fetch origin main 2>/dev/null || true' >> patch.txt
           echo '  git checkout FETCH_HEAD -- build 2>/dev/null || true' >> patch.txt
@@ -93,10 +91,15 @@ jobs:
           echo '        cd "$sub"' >> patch.txt
           echo '        git remote add euro https://github.com/Euro-Office/$sub.git 2>/dev/null || true' >> patch.txt
           echo '        git fetch euro main 2>/dev/null || true' >> patch.txt
+          echo '        # Checkout .docker and .gitmodules from euro/main to get build files and submodule definitions' >> patch.txt
           echo '        git checkout euro/main -- .docker 2>/dev/null || true' >> patch.txt
-          echo '        if [ ! -d ".docker" ]; then' >> patch.txt
-          echo '          mkdir -p .docker' >> patch.txt
-          echo '          echo "FROM scratch" > .docker/Dockerfile' >> patch.txt
+          echo '        git checkout euro/main -- .gitmodules 2>/dev/null || true' >> patch.txt
+          echo '        # Initialize submodules (e.g., sdkjs-forms inside sdkjs)' >> patch.txt
+          echo '        git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
+          echo '        # Fallback: if sdkjs-forms is still missing, clone it manually' >> patch.txt
+          echo '        if [ "$sub" = "sdkjs" ] && [ ! -d "sdkjs-forms" ]; then' >> patch.txt
+          echo '          git clone https://github.com/Euro-Office/sdkjs-forms.git sdkjs-forms 2>/dev/null || \' >> patch.txt
+          echo '          git clone https://github.com/ONLYOFFICE/sdkjs-forms.git sdkjs-forms 2>/dev/null || true' >> patch.txt
           echo '        fi' >> patch.txt
           echo '      )' >> patch.txt
           echo '    fi' >> patch.txt
