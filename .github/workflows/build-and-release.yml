@@ -81,45 +81,37 @@ jobs:
             's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/' \
             PKGBUILD
 
-          # Patch: fetch the build/ dir and Euro-Office submodule forks from main,
-          # since tagged releases don't ship the build/ directory.
-          cat > patch.txt <<'PATCH'
-          cd "DesktopEditors"
-          git fetch origin main 2>/dev/null || true
-          git checkout FETCH_HEAD -- build 2>/dev/null || true
-          for sub in core desktop-apps sdkjs web-apps; do
-            if [ -d "$sub" ]; then
-              (
-                cd "$sub"
-                git remote set-url origin https://github.com/Euro-Office/$sub.git 2>/dev/null || true
-                git fetch origin main 2>/dev/null || true
-                git reset --hard origin/main 2>/dev/null || true
-                git submodule update --init --recursive 2>/dev/null || true
-              )
-            fi
-          done
-          git checkout FETCH_HEAD -- .gitmodules 2>/dev/null || true
-          git submodule update --init --recursive 2>/dev/null || true
-          for sub in sdkjs-forms document-templates core-fonts; do
-            if [ ! -d "$sub" ] || [ -z "$(ls -A $sub 2>/dev/null)" ]; then
-              rm -rf "$sub" 2>/dev/null || true
-              git clone https://github.com/Euro-Office/$sub.git $sub 2>/dev/null || \
-              git clone https://github.com/ONLYOFFICE/$sub.git $sub 2>/dev/null || true
-            fi
-          done
-          cd ".."
-          PATCH
-
-          # Inject patch.txt before 'cd "DesktopEditors/build"' in the build() function
-          awk '
-          /cd "DesktopEditors\/build"/ {
-              while ((getline line < "patch.txt") > 0) print line
-          }
-          {print}
-          ' PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
-
-      - name: Build package
-        run: |
+          # Patch: After prepare() checks out the tagged commit and inits submodules,
+          # the build/ dir won't exist because it only lives on main.
+          # Inject commands after 'git submodule update --init --recursive' in prepare()
+          # to fetch the build/ dir from main, and switch submodules to Euro-Office forks.
+          sed -i '/git submodule update --init --recursive/a\
+          echo "==> Patching: fetching build dir from main branch..."\
+          git fetch origin main\
+          git checkout FETCH_HEAD -- build\
+          echo "==> Patching: switching submodules to Euro-Office forks..."\
+          for sub in core desktop-apps sdkjs web-apps; do\
+            if [ -d "$sub" ]; then\
+              ( cd "$sub" \&\& git remote set-url origin https://github.com/Euro-Office/$sub.git \&\& git fetch origin main \&\& git reset --hard origin/main \&\& git submodule update --init --recursive ) || true\
+            fi\
+          done\
+          git checkout FETCH_HEAD -- .gitmodules 2>/dev/null || true\
+          git submodule update --init --recursive 2>/dev/null || true\
+          for sub in sdkjs-forms document-templates core-fonts; do\
+            if [ ! -d "$sub" ] || [ -z "$(ls -A $sub 2>/dev/null)" ]; then\
+              rm -rf "$sub" 2>/dev/null || true\
+              git clone https://github.com/Euro-Office/$sub.git "$sub" 2>/dev/null || git clone https://github.com/ONLYOFFICE/$sub.git "$sub" 2>/dev/null || true\
+            fi\
+          done\
+          echo "==> Patch complete. build/ dir contents:"\
+          ls -la build/ || echo "WARNING: build/ dir still missing!"' PKGBUILD
+        
+                  echo "=== PATCHED PKGBUILD ==="
+                  cat PKGBUILD
+                  echo "========================"
+        
+              - name: Build package
+                run: |
           cd /home/builder/pkg
 
           chown -R builder:builder /home/builder/pkg
