@@ -1,201 +1,156 @@
 name: Build AppImage
 
 on:
-schedule:
-- cron: "0 2 * * *"
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
-contents: write
+  contents: write
 
 jobs:
-check-version:
-runs-on: ubuntu-latest
-outputs:
-latest_tag: ${{ steps.get_tag.outputs.latest_tag }}
-should_build: ${{ steps.compare.outputs.should_build }}
+  build:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Get upstream latest tag
-    id: get_tag
-    run: |
-      set -euo pipefail
-      LATEST_TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
-      echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+    container:
+      image: archlinux:base-devel
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
 
-  - name: Check if release already exists
-    id: compare
-    run: |
-      set -euo pipefail
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      TAG="${{ steps.get_tag.outputs.latest_tag }}"
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm \
+            git \
+            sudo \
+            docker \
+            wget \
+            jq \
+            fuse2 \
+            desktop-file-utils \
+            grep \
+            awk \
+            cpio
 
-      if curl -sSf \
-        "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" \
-        >/dev/null 2>&1; then
-        echo "should_build=false" >> "$GITHUB_OUTPUT"
-      else
-        echo "should_build=true" >> "$GITHUB_OUTPUT"
-      fi
+      - name: Create builder user
+        run: |
+          useradd -m builder || true
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-build:
-needs: check-version
-if: needs.check-version.outputs.should_build == 'true'
+          DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+          groupadd -g "$DOCKER_GID" docker 2>/dev/null || true
+          usermod -aG docker builder
 
-runs-on: ubuntu-latest
+          chmod 666 /var/run/docker.sock
 
-container:
-  image: archlinux:base-devel
-  volumes:
-    - /var/run/docker.sock:/var/run/docker.sock
+      - name: Install yay
+        run: |
+          sudo -u builder bash -c '
+            cd ~
+            git clone https://aur.archlinux.org/yay-bin.git
+            cd yay-bin
+            makepkg -si --noconfirm
+          '
 
-steps:
-  - uses: actions/checkout@v4
+      - name: Get latest tag
+        id: tag
+        run: |
+          TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-  - name: Install dependencies
-    run: |
-      set -euo pipefail
+      - name: Clone PKGBUILD
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          PKGVER="${TAG#v}"
 
-      pacman -Syu --noconfirm
-      pacman -S --noconfirm \
-        git \
-        sudo \
-        docker \
-        jq \
-        wget \
-        fuse2 \
-        desktop-file-utils \
-        grep \
-        awk \
-        cpio
+          sudo -u builder git clone \
+            https://aur.archlinux.org/euro-office-desktopeditors-git.git \
+            /home/builder/pkg
 
-  - name: Create builder user
-    run: |
-      set -euo pipefail
+          cd /home/builder/pkg
 
-      useradd -m builder || true
-      echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          sed -i '/pkgver() {/,/}/d' PKGBUILD
+          sed -i "s/pkgver=.*/pkgver=$PKGVER/" PKGBUILD
+          sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/" PKGBUILD
+          sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/" PKGBUILD
+          sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|" PKGBUILD
 
-      DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+          sed -i \
+            's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/' \
+            PKGBUILD
 
-      groupadd -g "$DOCKER_GID" docker 2>/dev/null || true
-      usermod -aG docker builder
+      - name: Build package
+        run: |
+          cd /home/builder/pkg
 
-      chmod 666 /var/run/docker.sock
+          chown -R builder:builder /home/builder/pkg
 
-  - name: Install yay
-    run: |
-      set -euo pipefail
+          sudo -u builder yay -S --noconfirm libtiff5
+          sudo -u builder makepkg -s --noconfirm
 
-      sudo -u builder bash -c '
-        cd ~
-        git clone https://aur.archlinux.org/yay-bin.git
-        cd yay-bin
-        makepkg -si --noconfirm
-      '
+      - name: Find package
+        id: pkg
+        run: |
+          cd /home/builder/pkg
 
-  - name: Clone package
-    run: |
-      set -euo pipefail
+          PKGFILE=$(find . -maxdepth 1 -name "*.pkg.tar.zst" | head -n 1)
 
-      TAG="${{ needs.check-version.outputs.latest_tag }}"
-      PKGVER="${TAG#v}"
+          cp "$PKGFILE" "${{ github.workspace }}/"
 
-      sudo -u builder git clone \
-        https://aur.archlinux.org/euro-office-desktopeditors-git.git \
-        /home/builder/pkg
+          echo "pkgfile=$(basename "$PKGFILE")" >> $GITHUB_OUTPUT
 
-      cd /home/builder/pkg
+      - name: Build AppImage
+        run: |
+          cd "${{ github.workspace }}"
 
-      sed -i '/pkgver() {/,/}/d' PKGBUILD
-      sed -i "s/pkgver=.*/pkgver=$PKGVER/" PKGBUILD
-      sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/" PKGBUILD
-      sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/" PKGBUILD
-      sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|" PKGBUILD
+          mkdir AppDir
 
-      sed -i \
-        's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/' \
-        PKGBUILD
+          tar -I zstd -xvf "${{ steps.pkg.outputs.pkgfile }}" -C AppDir
 
-  - name: Build package
-    run: |
-      set -euo pipefail
+          cd AppDir
 
-      cd /home/builder/pkg
+          cat > AppRun << 'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
 
-      chown -R builder:builder /home/builder/pkg
+          export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/opt/eurooffice/desktopeditors:${LD_LIBRARY_PATH}"
+          export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
 
-      sudo -u builder yay -S --noconfirm libtiff5
-      sudo -u builder makepkg -s --noconfirm
+          exec "${HERE}/usr/bin/euro-office-desktopeditors" "$@"
+          EOF
 
-  - name: Prepare package
-    id: prep
-    run: |
-      set -euo pipefail
+          chmod +x AppRun
 
-      cd /home/builder/pkg
+          cp usr/share/applications/euro-office-desktopeditors.desktop . || true
 
-      PKGFILE=$(find . -maxdepth 1 -name "*.pkg.tar.zst" -type f | head -n 1)
+          ICON=$(find usr/share/icons -name "*.png" | head -n 1)
 
-      cp "$PKGFILE" "${{ github.workspace }}/"
+          if [ -n "$ICON" ]; then
+            cp "$ICON" .
+          fi
 
-      echo "pkgfile=$(basename "$PKGFILE")" >> "$GITHUB_OUTPUT"
+          sed -i \
+            's|Exec=/usr/bin/euro-office-desktopeditors|Exec=euro-office-desktopeditors|' \
+            euro-office-desktopeditors.desktop || true
 
-  - name: Build AppImage
-    run: |
-      set -euo pipefail
+          cd ..
 
-      cd "${{ github.workspace }}"
+          wget \
+            -O appimagetool.AppImage \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
 
-      mkdir AppDir
+          chmod +x appimagetool.AppImage
 
-      tar -I zstd \
-        -xvf "${{ steps.prep.outputs.pkgfile }}" \
-        -C AppDir
+          ./appimagetool.AppImage \
+            --appimage-extract-and-run \
+            AppDir \
+            EuroOffice.AppImage
 
-      cd AppDir
-
-      cat > AppRun << 'EOF'
-      #!/bin/bash
-      HERE="$(dirname "$(readlink -f "$0")")"
-
-      export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/opt/eurooffice/desktopeditors:${LD_LIBRARY_PATH}"
-      export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
-
-      exec "${HERE}/usr/bin/euro-office-desktopeditors" "$@"
-      EOF
-
-      chmod +x AppRun
-
-      cp usr/share/applications/euro-office-desktopeditors.desktop . || true
-
-      ICON=$(find usr/share/icons -name "*.png" | head -n 1)
-
-      if [ -n "$ICON" ]; then
-        cp "$ICON" .
-      fi
-
-      sed -i \
-        's|Exec=/usr/bin/euro-office-desktopeditors|Exec=euro-office-desktopeditors|' \
-        euro-office-desktopeditors.desktop || true
-
-      cd ..
-
-      wget -O appimagetool.AppImage \
-        https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-
-      chmod +x appimagetool.AppImage
-
-      ./appimagetool.AppImage \
-        --appimage-extract-and-run \
-        AppDir \
-        EuroOffice.AppImage
-
-  - name: Publish Release
-    uses: softprops/action-gh-release@v2
-    with:
-      tag_name: ${{ needs.check-version.outputs.latest_tag }}
-      name: Euro-Office Desktop Editors ${{ needs.check-version.outputs.latest_tag }}
-      files: EuroOffice.AppImage
-      body: |
-        Automated AppImage build for Euro-Office Desktop Editors.
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Euro-Office Desktop Editors ${{ steps.tag.outputs.tag }}
+          files: EuroOffice.AppImage
