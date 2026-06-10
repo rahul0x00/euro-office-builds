@@ -81,6 +81,43 @@ jobs:
             's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/' \
             PKGBUILD
 
+          # Patch: fetch the build/ dir and Euro-Office submodule forks from main,
+          # since tagged releases don't ship the build/ directory.
+          cat > patch.txt <<'PATCH'
+          cd "DesktopEditors"
+          git fetch origin main 2>/dev/null || true
+          git checkout FETCH_HEAD -- build 2>/dev/null || true
+          for sub in core desktop-apps sdkjs web-apps; do
+            if [ -d "$sub" ]; then
+              (
+                cd "$sub"
+                git remote set-url origin https://github.com/Euro-Office/$sub.git 2>/dev/null || true
+                git fetch origin main 2>/dev/null || true
+                git reset --hard origin/main 2>/dev/null || true
+                git submodule update --init --recursive 2>/dev/null || true
+              )
+            fi
+          done
+          git checkout FETCH_HEAD -- .gitmodules 2>/dev/null || true
+          git submodule update --init --recursive 2>/dev/null || true
+          for sub in sdkjs-forms document-templates core-fonts; do
+            if [ ! -d "$sub" ] || [ -z "$(ls -A $sub 2>/dev/null)" ]; then
+              rm -rf "$sub" 2>/dev/null || true
+              git clone https://github.com/Euro-Office/$sub.git $sub 2>/dev/null || \
+              git clone https://github.com/ONLYOFFICE/$sub.git $sub 2>/dev/null || true
+            fi
+          done
+          cd ".."
+          PATCH
+
+          # Inject patch.txt before 'cd "DesktopEditors/build"' in the build() function
+          awk '
+          /cd "DesktopEditors\/build"/ {
+              while ((getline line < "patch.txt") > 0) print line
+          }
+          {print}
+          ' PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
+
       - name: Build package
         run: |
           cd /home/builder/pkg
