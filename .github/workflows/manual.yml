@@ -1,0 +1,14 @@
+name: Container Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    container:
+      image: ghcr.io/archlinux/archlinux:latest
+
+    steps:
+      - run: uname -a
