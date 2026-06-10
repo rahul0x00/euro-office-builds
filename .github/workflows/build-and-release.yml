@@ -118,6 +118,11 @@ jobs:
           {print}
           ' PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
 
+          # Debug: print the patched PKGBUILD so we can verify injection worked
+          echo "=== PATCHED PKGBUILD ==="
+          cat PKGBUILD
+          echo "========================"
+
       - name: Build package natively via makepkg
         run: |
           cd /home/builder/pkg
