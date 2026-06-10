@@ -146,12 +146,12 @@ jobs:
         run: |
           cd /home/builder/pkg
           PKGFILE=$(ls *.pkg.tar.zst | head -n 1)
-          cp $PKGFILE ${{ github.workspace }}/
+          cp $PKGFILE $GITHUB_WORKSPACE/
           echo "pkgfile=$PKGFILE" >> $GITHUB_OUTPUT
 
       - name: Generate Portable AppImage
         run: |
-          cd ${{ github.workspace }}
+          cd $GITHUB_WORKSPACE
           mkdir AppDir
           tar -I zstd -xvf ${{ steps.prep.outputs.pkgfile }} -C AppDir
 
@@ -189,28 +189,3 @@ jobs:
           name: Euro-Office Desktop Editors ${{ needs.check-version.outputs.latest_tag }}
           body: "Automated builds for Euro-Office (${{ needs.check-version.outputs.latest_tag }}).\n\nProvides Arch Linux Native installer and universal `.AppImage`."
 
-      - name: Update bin PKGBUILD
-        run: |
-          TAG="${{ needs.check-version.outputs.latest_tag }}"
-          PKGVER="${TAG#v}"
-          PKGFILE="${{ steps.prep.outputs.pkgfile }}"
-
-          sed -i "s/^pkgver=.*/pkgver=$PKGVER/g" aur-bin/PKGBUILD
-          sed -i "s|^source=.*|source=(\"euro-office-root-\${pkgver}.pkg.tar.zst::\${_repo_url}/releases/download/$TAG/$PKGFILE\")|g" aur-bin/PKGBUILD
-
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git config --global --add safe.directory $GITHUB_WORKSPACE
-          git add aur-bin/PKGBUILD
-          git commit -m "chore: Update bin package to $PKGVER" || true
-          git push origin main || true
-
-      - name: Publish PKGBUILD to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v3.0.1
-        with:
-          pkgname: euro-office-desktopeditors-bin
-          pkgbuild: aur-bin/PKGBUILD
-          commit_username: ${{ github.actor }}
-          commit_email: ${{ github.actor }}@users.noreply.github.com
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update version to ${{ needs.check-version.outputs.latest_tag }}"
