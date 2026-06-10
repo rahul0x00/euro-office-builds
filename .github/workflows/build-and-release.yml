@@ -82,22 +82,12 @@ jobs:
           sed -i 's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/g' PKGBUILD
 
           # Create the patch logic using echo commands to avoid YAML heredoc indentation errors.
+          # ORDER MATTERS: submodule update must happen BEFORE Euro-Office fork checkout,
+          # because submodule update reverts to the tag's old commit SHAs.
           echo '  cd "DesktopEditors"' > patch.txt
-          echo '  git fetch origin main 2>/dev/null || true' >> patch.txt
-          echo '  git checkout FETCH_HEAD -- build 2>/dev/null || true' >> patch.txt
-          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
-          echo '    if [ -d "$sub" ]; then' >> patch.txt
-          echo '      (' >> patch.txt
-          echo '        cd "$sub"' >> patch.txt
-          echo '        # The new Docker build infrastructure from Euro-Office/main requires the Euro-Office forks' >> patch.txt
-          echo '        # because they contain CMakeLists.txt and other build files missing in the upstream ONLYOFFICE repos.' >> patch.txt
-          echo '        git remote set-url origin https://github.com/Euro-Office/$sub.git 2>/dev/null || true' >> patch.txt
-          echo '        git fetch origin main 2>/dev/null || true' >> patch.txt
-          echo '        git reset --hard origin/main 2>/dev/null || true' >> patch.txt
-          echo '        git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
-          echo '      )' >> patch.txt
-          echo '    fi' >> patch.txt
-          echo '  done' >> patch.txt
+          echo '  echo "==> Fetching build/ dir from main branch..."' >> patch.txt
+          echo '  git fetch origin main' >> patch.txt
+          echo '  git checkout FETCH_HEAD -- build' >> patch.txt
           echo '  git checkout FETCH_HEAD -- .gitmodules 2>/dev/null || true' >> patch.txt
           echo '  git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
           echo '  for sub in sdkjs-forms document-templates core-fonts; do' >> patch.txt
@@ -107,6 +97,20 @@ jobs:
           echo '      git clone https://github.com/ONLYOFFICE/$sub.git $sub 2>/dev/null || true' >> patch.txt
           echo '    fi' >> patch.txt
           echo '  done' >> patch.txt
+          echo '  echo "==> Switching submodules to Euro-Office forks (AFTER submodule update)..."' >> patch.txt
+          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
+          echo '    if [ -d "$sub" ]; then' >> patch.txt
+          echo '      (' >> patch.txt
+          echo '        cd "$sub"' >> patch.txt
+          echo '        git remote set-url origin https://github.com/Euro-Office/$sub.git' >> patch.txt
+          echo '        git fetch origin main' >> patch.txt
+          echo '        git reset --hard origin/main' >> patch.txt
+          echo '        git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
+          echo '      )' >> patch.txt
+          echo '    fi' >> patch.txt
+          echo '  done' >> patch.txt
+          echo '  echo "==> Verifying core/.docker exists..."' >> patch.txt
+          echo '  ls -la core/.docker/ || echo "ERROR: core/.docker still missing!"' >> patch.txt
           echo '  cd ".."' >> patch.txt
 
           # Inject the patch.txt contents immediately BEFORE the 'cd "DesktopEditors/build"' command 
