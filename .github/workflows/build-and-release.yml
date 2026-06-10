@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: archlinux:base-devel
+      image: ghcr.io/archlinux/archlinux:latest
       volumes:
         - /var/run/docker.sock:/var/run/docker.sock
 
@@ -21,7 +21,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm
+          pacman -Syyu --noconfirm
           pacman -S --noconfirm \
             git \
             sudo \
