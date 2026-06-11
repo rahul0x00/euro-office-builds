@@ -157,12 +157,35 @@ jobs:
 
           cd AppDir
 
+          # Debug: show the actual package structure to verify paths
+          echo "=== Package structure ==="
+          find . -name "DesktopEditors" -o -name "desktopeditors" -type d | head -20
+          ls -la opt/ 2>/dev/null || true
+          ls -la opt/euro-office/ 2>/dev/null || ls -la opt/eurooffice/ 2>/dev/null || true
+          echo "=== Wrapper script contents ==="
+          cat usr/bin/euro-office-desktopeditors 2>/dev/null | head -20 || true
+          echo "========================"
+
+          # Find the actual install directory (could be euro-office or eurooffice)
+          INSTALL_DIR=$(find opt -maxdepth 2 -name "DesktopEditors" -type f -printf '%h' -quit 2>/dev/null)
+          if [ -z "$INSTALL_DIR" ]; then
+            INSTALL_DIR=$(find opt -maxdepth 2 -type d -name "desktopeditors" -quit 2>/dev/null)
+          fi
+          echo "Found install dir: $INSTALL_DIR"
+
           cat << 'EOF2' > AppRun
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
-          export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/opt/eurooffice/desktopeditors:${LD_LIBRARY_PATH}"
+
+          # Find the actual DesktopEditors binary
+          BINARY="$(find "${HERE}/opt" -maxdepth 3 -name "DesktopEditors" -type f -quit 2>/dev/null)"
+          APPDIR="$(dirname "${BINARY}")"
+
+          export LD_LIBRARY_PATH="${APPDIR}:${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+          export QT_PLUGIN_PATH="${APPDIR}:${QT_PLUGIN_PATH}"
           export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
-          exec "${HERE}/usr/bin/euro-office-desktopeditors" "$@"
+
+          exec "${BINARY}" "$@"
           EOF2
           chmod +x AppRun
 
