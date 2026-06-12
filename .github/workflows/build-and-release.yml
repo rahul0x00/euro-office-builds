@@ -99,7 +99,7 @@ jobs:
           echo '  done' >> patch.txt
           echo '' >> patch.txt
           echo '  echo "==> Switching submodules to Euro-Office forks..."' >> patch.txt
-          echo '  for sub in core desktop-apps desktop-sdk sdkjs web-apps; do' >> patch.txt
+          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
           echo '    if [ -d "$sub" ]; then' >> patch.txt
           echo '      (' >> patch.txt
           echo '        cd "$sub"' >> patch.txt
