@@ -98,7 +98,7 @@ jobs:
           echo '    fi' >> patch.txt
           echo '  done' >> patch.txt
           echo '  echo "==> Fetching .docker dirs from Euro-Office forks..."' >> patch.txt
-          echo '  for sub in core desktop-apps; do' >> patch.txt
+          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
           echo '    if [ -d "$sub" ]; then' >> patch.txt
           echo '      (' >> patch.txt
           echo '        cd "$sub"' >> patch.txt
@@ -110,8 +110,9 @@ jobs:
           echo '  done' >> patch.txt
           echo '' >> patch.txt
           echo '  echo "==> Verifying .docker dirs exist..."' >> patch.txt
-          echo '  ls core/.docker/ && echo "core/.docker OK" || echo "ERROR: core/.docker missing!"' >> patch.txt
-          echo '  ls desktop-apps/.docker/ && echo "desktop-apps/.docker OK" || echo "ERROR: desktop-apps/.docker missing!"' >> patch.txt
+          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
+          echo '    ls $sub/.docker/ && echo "$sub/.docker OK" || echo "ERROR: $sub/.docker missing!"' >> patch.txt
+          echo '  done' >> patch.txt
           echo '  cd ".."' >> patch.txt
 
           # Inject the patch.txt contents immediately BEFORE the 'cd "DesktopEditors/build"' command 
