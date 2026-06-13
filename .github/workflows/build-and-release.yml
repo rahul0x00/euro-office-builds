@@ -98,7 +98,7 @@ jobs:
           echo '    fi' >> patch.txt
           echo '  done' >> patch.txt
           echo '  echo "==> Switching submodules to Euro-Office forks..."' >> patch.txt
-          echo '  for sub in core desktop-apps desktop-sdk sdkjs web-apps; do' >> patch.txt
+          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
           echo '    if [ -d "$sub" ]; then' >> patch.txt
           echo '      (' >> patch.txt
           echo '        cd "$sub"' >> patch.txt
@@ -109,6 +109,18 @@ jobs:
           echo '      )' >> patch.txt
           echo '    fi' >> patch.txt
           echo '  done' >> patch.txt
+          echo '' >> patch.txt
+          echo '  # Pin desktop-sdk to pre-CEF commit (upstream bug: CEF not in vcpkg manifest)' >> patch.txt
+          echo '  echo "==> Pinning desktop-sdk to pre-CEF commit..."' >> patch.txt
+          echo '  if [ -d "desktop-sdk" ]; then' >> patch.txt
+          echo '    (' >> patch.txt
+          echo '      cd "desktop-sdk"' >> patch.txt
+          echo '      git remote set-url origin https://github.com/Euro-Office/desktop-sdk.git' >> patch.txt
+          echo '      git fetch origin main' >> patch.txt
+          echo '      git reset --hard d938293722fdeb9bb75214c7070410818fa36422' >> patch.txt
+          echo '      git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
+          echo '    )' >> patch.txt
+          echo '  fi' >> patch.txt
           echo '' >> patch.txt
           echo '  echo "==> Verifying .docker dirs exist..."' >> patch.txt
           echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
