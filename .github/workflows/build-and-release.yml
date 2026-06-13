@@ -21,7 +21,6 @@ jobs:
           LATEST_TAG=$(curl -s https://api.github.com/repos/Euro-Office/DesktopEditors/tags | jq -r '.[0].name')
           echo "Latest tag: $LATEST_TAG"
           echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-
       - name: Check if release exists
         id: compare
         run: |
@@ -32,7 +31,6 @@ jobs:
             echo "Release does not exist. Triggering build."
             echo "should_build=true" >> $GITHUB_OUTPUT
           fi
-
   build:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
@@ -48,39 +46,31 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm git sudo docker jq wget fuse2 desktop-file-utils grep awk cpio
-
       - name: Create builder user and install yay
         run: |
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-
           # Fix Docker socket permissions so the non-root builder user can use Docker.
           DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
           groupadd -g "$DOCKER_GID" docker 2>/dev/null || groupmod -g "$DOCKER_GID" docker 2>/dev/null || true
           usermod -aG docker builder
           chmod 666 /var/run/docker.sock
-
           # Install yay to handle AUR dependencies
           sudo -u builder bash -c "cd /home/builder && git clone https://aur.archlinux.org/yay-bin.git && cd yay-bin && makepkg -si --noconfirm"
-
       - name: Clone generic AUR package and set target tag
         run: |
           TAG="${{ needs.check-version.outputs.latest_tag }}"
           PKGVER="${TAG#v}"
-
           sudo -u builder git clone https://aur.archlinux.org/euro-office-desktopeditors-git.git /home/builder/pkg
           cd /home/builder/pkg
-
           # Modify PKGBUILD to build the specific tag instead of master branch
           sed -i '/pkgver() {/,/}/d' PKGBUILD
           sed -i "s/pkgver=.*/pkgver=$PKGVER/g" PKGBUILD
           sed -i "s/pkgname=euro-office-desktopeditors-git/pkgname=euro-office-desktopeditors/g" PKGBUILD
           sed -i "s/conflicts=.*/conflicts=('euro-office-desktopeditors-git')/g" PKGBUILD
           sed -i "s|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git\")|source=(\"git+https://github.com/Euro-Office/DesktopEditors.git#tag=$TAG\")|g" PKGBUILD
-
           # Grant Buildx required entitlements for reading parent directories and /tmp
           sed -i 's/docker buildx bake packages/docker buildx bake --allow=fs=\/tmp --allow=fs.read=.. packages/g' PKGBUILD
-
           # Create the patch logic using echo commands to avoid YAML heredoc indentation errors.
           # ORDER MATTERS: submodule update must happen BEFORE Euro-Office fork checkout,
           # because submodule update reverts to the tag's old commit SHAs.
@@ -97,37 +87,31 @@ jobs:
           echo '      git clone https://github.com/ONLYOFFICE/$sub.git $sub 2>/dev/null || true' >> patch.txt
           echo '    fi' >> patch.txt
           echo '  done' >> patch.txt
-          echo '  echo "==> Switching submodules to Euro-Office forks..."' >> patch.txt
-          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
+          echo '' >> patch.txt
+          echo '  echo "==> Switching submodules to Euro-Office forks (pinned to known-good commits)..."' >> patch.txt
+          echo '  pin_sub() {' >> patch.txt
+          echo '    local sub=$1 commit=$2' >> patch.txt
           echo '    if [ -d "$sub" ]; then' >> patch.txt
           echo '      (' >> patch.txt
           echo '        cd "$sub"' >> patch.txt
           echo '        git remote set-url origin https://github.com/Euro-Office/$sub.git' >> patch.txt
           echo '        git fetch origin main' >> patch.txt
-          echo '        git reset --hard origin/main' >> patch.txt
+          echo '        git reset --hard $commit' >> patch.txt
           echo '        git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
           echo '      )' >> patch.txt
           echo '    fi' >> patch.txt
-          echo '  done' >> patch.txt
-          echo '' >> patch.txt
-          echo '  # Pin desktop-sdk to pre-CEF commit (upstream bug: CEF not in vcpkg manifest)' >> patch.txt
-          echo '  echo "==> Pinning desktop-sdk to pre-CEF commit..."' >> patch.txt
-          echo '  if [ -d "desktop-sdk" ]; then' >> patch.txt
-          echo '    (' >> patch.txt
-          echo '      cd "desktop-sdk"' >> patch.txt
-          echo '      git remote set-url origin https://github.com/Euro-Office/desktop-sdk.git' >> patch.txt
-          echo '      git fetch origin main' >> patch.txt
-          echo '      git reset --hard d938293722fdeb9bb75214c7070410818fa36422' >> patch.txt
-          echo '      git submodule update --init --recursive 2>/dev/null || true' >> patch.txt
-          echo '    )' >> patch.txt
-          echo '  fi' >> patch.txt
+          echo '  }' >> patch.txt
+          echo '  # Commits from successful build (June 10, 2026)' >> patch.txt
+          echo '  pin_sub core       740b5f5d6e' >> patch.txt
+          echo '  pin_sub desktop-apps c7af24ccc' >> patch.txt
+          echo '  pin_sub desktop-sdk  55917e46' >> patch.txt
+          echo '  pin_sub sdkjs       c668760237' >> patch.txt
+          echo '  pin_sub web-apps    b61eee0598' >> patch.txt
           echo '' >> patch.txt
           echo '  echo "==> Verifying .docker dirs exist..."' >> patch.txt
-          echo '  for sub in core desktop-apps sdkjs web-apps; do' >> patch.txt
-          echo '    ls $sub/.docker/ && echo "$sub/.docker OK" || echo "ERROR: $sub/.docker missing!"' >> patch.txt
-          echo '  done' >> patch.txt
+          echo '  ls core/.docker/ && echo "core/.docker OK" || echo "ERROR: core/.docker missing!"' >> patch.txt
+          echo '  ls desktop-apps/.docker/ && echo "desktop-apps/.docker OK" || echo "ERROR: desktop-apps/.docker missing!"' >> patch.txt
           echo '  cd ".."' >> patch.txt
-
           # Inject the patch.txt contents immediately BEFORE the 'cd "DesktopEditors/build"' command 
           # inside the build() function.
           awk '
@@ -136,23 +120,18 @@ jobs:
           }
           {print}
           ' PKGBUILD > PKGBUILD.new && mv PKGBUILD.new PKGBUILD
-
           # Debug: print the patched PKGBUILD so we can verify injection worked
           echo "=== PATCHED PKGBUILD ==="
           cat PKGBUILD
           echo "========================"
-
       - name: Build package natively via makepkg
         run: |
           cd /home/builder/pkg
           chown -R builder:builder /home/builder/pkg
-
           # Pre-install the AUR dependency libtiff5 using yay safely
           sudo -u builder yay -S --noconfirm libtiff5
-
           # Now makepkg will comfortably resolve the rest of the standard dependencies
           sudo -u builder makepkg -s --noconfirm
-
       - name: Prepare Workspace Artifacts
         id: prep
         run: |
@@ -160,31 +139,14 @@ jobs:
           PKGFILE=$(ls *.pkg.tar.zst | head -n 1)
           cp $PKGFILE $GITHUB_WORKSPACE/
           echo "pkgfile=$PKGFILE" >> $GITHUB_OUTPUT
-
       - name: Generate Portable AppImage
         run: |
           cd $GITHUB_WORKSPACE
           mkdir AppDir
           tar -I zstd -xvf ${{ steps.prep.outputs.pkgfile }} -C AppDir
-
           cd AppDir
 
-          # Debug: show the actual package structure to verify paths
-          echo "=== Package structure ==="
-          find . -name "DesktopEditors" -o -name "desktopeditors" -type d | head -20
-          ls -la opt/ 2>/dev/null || true
-          ls -la opt/euro-office/ 2>/dev/null || ls -la opt/eurooffice/ 2>/dev/null || true
-          echo "=== Wrapper script contents ==="
-          cat usr/bin/euro-office-desktopeditors 2>/dev/null | head -20 || true
-          echo "========================"
-
-          # Find the actual install directory (could be euro-office or eurooffice)
-          INSTALL_DIR=$(find opt -maxdepth 2 -name "DesktopEditors" -type f -printf '%h' -quit 2>/dev/null)
-          if [ -z "$INSTALL_DIR" ]; then
-            INSTALL_DIR=$(find opt -maxdepth 2 -type d -name "desktopeditors" -quit 2>/dev/null)
-          fi
-          echo "Found install dir: $INSTALL_DIR"
-
+          # Dynamic AppRun that finds DesktopEditors binary regardless of install path
           cat << 'EOF2' > AppRun
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "${0}")")"
@@ -206,14 +168,11 @@ jobs:
           if [ -n "$ICON_PATH" ]; then
              cp "$ICON_PATH" .
           fi
-
           sed -i 's|Exec=/usr/bin/euro-office-desktopeditors|Exec=euro-office-desktopeditors|g' euro-office-desktopeditors.desktop || true
-
           cd ..
           wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
           ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir euro-office-desktopeditors.AppImage
-
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
@@ -223,4 +182,3 @@ jobs:
             *.AppImage
           name: Euro-Office Desktop Editors ${{ needs.check-version.outputs.latest_tag }}
           body: "Automated builds for Euro-Office (${{ needs.check-version.outputs.latest_tag }}).\n\nProvides Arch Linux Native installer and universal `.AppImage`."
-
